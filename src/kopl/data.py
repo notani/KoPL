@@ -1,6 +1,7 @@
 from collections import defaultdict
 from datetime import date
 from queue import Queue
+from typing import Any, Union
 
 from copy import deepcopy
 from tqdm import tqdm
@@ -8,25 +9,79 @@ from tqdm import tqdm
 from kopl.util import ValueClass
 
 
-def conv_enc(s):
+def conv_enc(s: str) -> str:
+    """Convert encoding for strings with unicode escape sequences.
+
+    This function handles unicode escape sequences in strings by attempting
+    to decode them properly. If decoding fails, it removes the unicode prefix.
+
+    Args:
+        s: The input string that may contain unicode escape sequences
+
+    Returns:
+        The string with unicode sequences properly decoded or cleaned
+    """
     try:
         s = s.encode("utf-8").decode("unicode_escape")
-    except:
+    except Exception:
         s = s.replace("\\u", "")
     return s
 
 
-def lambda_list():
+def lambda_list() -> defaultdict[Any, list[Any]]:
+    """Create a defaultdict that returns empty lists for missing keys.
+
+    This is a factory function used to create defaultdict instances that
+    automatically create empty lists when accessing non-existent keys.
+
+    Returns:
+        A defaultdict that creates empty lists for missing keys
+    """
     return defaultdict(list)
 
 
-def lambda_set():
+def lambda_set() -> defaultdict[Any, set[Any]]:
+    """Create a defaultdict that returns empty sets for missing keys.
+
+    This is a factory function used to create defaultdict instances that
+    automatically create empty sets when accessing non-existent keys.
+
+    Returns:
+        A defaultdict that creates empty sets for missing keys
+    """
     return defaultdict(set)
 
 
 class KB(object):
-    def __init__(self, kb):
-        self.entities = {}
+    """Knowledge Base wrapper for KoPL engine.
+
+    This class processes and indexes a knowledge base containing entities and concepts.
+    It builds multiple indices for efficient querying including:
+    - Name-to-ID mappings for entity lookup
+    - Concept hierarchy with inheritance relationships
+    - Inverted indices for attributes and relations
+    - Forward indices for relation traversal
+
+    The knowledge base follows a specific JSON format with entities and concepts
+    where entities have attributes and relations, and concepts define taxonomies.
+
+    Args:
+        kb: Knowledge base dictionary containing 'entities' and 'concepts' keys
+    """
+
+    def __init__(self, kb: dict[str, Any]) -> None:
+        """Initialize the knowledge base with comprehensive indexing.
+
+        This constructor processes the input knowledge base to create multiple
+        indices for efficient querying. It handles entity-concept relationships,
+        builds inverted indices for attributes and relations, and converts all
+        values to strongly-typed ValueClass instances.
+
+        Args:
+            kb: Dictionary with 'entities' and 'concepts' keys containing the knowledge base data
+        """
+        # Main entity storage - contains both entities and concepts
+        self.entities: dict[str, dict[str, Any]] = {}
         for cid in kb["concepts"]:
             self.entities[cid] = kb["concepts"][cid]
             self.entities[cid]["relations"] = []
@@ -84,58 +139,56 @@ class KB(object):
         # 			if qv['type'] == 'string':
         # 				qv['value'] = conv_enc(qv['value'])
         print("process concept")
-        self.name_to_id = defaultdict(list)  # id 包含 concept 和 entity
-        self.concept_to_entity = defaultdict(set)
+        # Name-to-ID mapping: entity name -> list of entity IDs (includes both concepts and entities)
+        self.name_to_id: defaultdict[str, list[str]] = defaultdict(list)
+        # Concept hierarchy: concept ID -> set of entity IDs that belong to this concept (converted to list later)
+        self.concept_to_entity: Union[
+            defaultdict[str, set[str]], dict[str, list[str]]
+        ] = defaultdict(set)
         for ent_id, ent_info in tqdm(self.entities.items()):
             self.name_to_id[ent_info["name"]].append(ent_id)
             for c in self.get_all_concepts(
                 ent_id
             ):  # merge entity into ancestor concept
                 self.concept_to_entity[c].add(ent_id)
+        # Convert from defaultdict[str, set] to dict[str, list] for final usage
         self.concept_to_entity = {k: list(v) for k, v in self.concept_to_entity.items()}
-        self.concepts = list(self.concept_to_entity.keys())
+        # List of all concept IDs in the knowledge base
+        self.concepts: list[str] = list(self.concept_to_entity.keys())
 
         print("process attribute and relation")
-        # get all attribute keys and relations
-        self.attribute_keys = set()
-        self.relations = set()
-        self.key_type = {}
-        """
-		{
-			<attribute key>: {
-				<entity id>: [idx1, idx2], # index in self.entities[ent_id]['attributes']
-			}
-		}
-		"""
+        # All unique attribute keys found in the knowledge base (converted to list later)
+        self.attribute_keys: Union[set[str], list[str]] = set()
+        # All unique relation types found in the knowledge base (converted to list later)
+        self.relations: Union[set[str], list[str]] = set()
+        # Mapping from attribute/qualifier keys to their value types
+        self.key_type: dict[str, str] = {}
+        # Inverted index for attributes: attribute_key -> {entity_id: [indices]}
+        # Maps each attribute key to entities that have that attribute,
+        # with indices pointing to positions in entities[ent_id]['attributes']
+        self.attribute_inv_index: defaultdict[str, defaultdict[str, list[int]]] = (
+            defaultdict(lambda_list)
+        )
 
-        self.attribute_inv_index = defaultdict(lambda_list)
-        # self.attribute_inv_index = {}
-        """
-		{
-			(relation, direction): {
-				<entity id>: [idx1, idx2], # index in self.entities[ent_id]['relations']
-			}
-		}
-		"""
-        self.relation_inv_index = defaultdict(lambda_list)
-        # self.relation_inv_index = {}
-        """
-		{
-			(sub_id, obj_id): [idx1, idx2] # index in self.entities[sub_id]['relations']
-		}
-		"""
-        self.forward_relation_index = defaultdict(list)
+        # Inverted index for relations: (relation, direction) -> {entity_id: [indices]}
+        # Maps each (relation_type, direction) pair to entities with that relation,
+        # with indices pointing to positions in entities[ent_id]['relations']
+        self.relation_inv_index: defaultdict[
+            tuple[str, str], defaultdict[str, list[int]]
+        ] = defaultdict(lambda_list)
 
-        # store entities that have attribute
-        self.entity_set_with_attribute = set()
-        # store entities that have quantity attribute
-        self.entity_set_with_quantity_attribute = set()
-        # store entities that have attribute qualifier
-        self.entity_set_with_attribute_qualifier = set()
-        # store entities that have relation
-        self.entity_set_with_relation = set()
-        # store entities that have relation qualifier
-        self.entity_set_with_relation_qualifier = set()
+        # Forward relation index: (subject_id, object_id) -> [indices]
+        # Maps entity pairs to relation indices for efficient relation traversal
+        self.forward_relation_index: defaultdict[tuple[str, str], list[int]] = (
+            defaultdict(list)
+        )
+
+        # Entity sets for efficient filtering and querying (converted to lists later)
+        self.entity_set_with_attribute: Union[set[str], list[str]] = set()
+        self.entity_set_with_quantity_attribute: Union[set[str], list[str]] = set()
+        self.entity_set_with_attribute_qualifier: Union[set[str], list[str]] = set()
+        self.entity_set_with_relation: Union[set[str], list[str]] = set()
+        self.entity_set_with_relation_qualifier: Union[set[str], list[str]] = set()
         for ent_id, ent_info in tqdm(self.entities.items()):
             for idx, attr_info in enumerate(ent_info["attributes"]):
                 self.attribute_keys.add(attr_info["key"])
@@ -197,11 +250,14 @@ class KB(object):
         )
 
         print("extract seen values")
-        self.key_values = defaultdict(set)
-        self.concept_key_values = defaultdict(
-            lambda_set
-        )  # not include qualifier values
-        self.concept_relations = defaultdict(lambda_list)
+        # Values seen for each attribute key (converted from set to list later)
+        self.key_values: Any = defaultdict(set)
+        # Values seen for each concept-attribute combination (not including qualifier values)
+        self.concept_key_values: Any = defaultdict(lambda_set)
+        # Relations for each concept
+        self.concept_relations: defaultdict[
+            str, defaultdict[tuple[str, str], list[str]]
+        ] = defaultdict(lambda_list)
 
         for ent_id, ent_info in tqdm(self.entities.items()):
             for attr_info in ent_info["attributes"]:
@@ -234,9 +290,18 @@ class KB(object):
         print("number of attribute keys: %d" % len(self.attribute_keys))
         print("number of relations: %d" % len(self.relations))
 
-    def get_direct_concepts(self, ent_id):
-        """
-        return the direct concept id of given entity/concept
+    def get_direct_concepts(self, ent_id: str) -> list[str]:
+        """Get the direct parent concept IDs of a given entity or concept.
+
+        This method returns the immediate parent concepts in the concept hierarchy.
+        For entities, these are the concepts they are instances of. For concepts,
+        these are the parent concepts in the subclass hierarchy.
+
+        Args:
+            ent_id: The entity or concept ID to get parents for
+
+        Returns:
+            List of direct parent concept IDs. Returns empty list if entity not found.
         """
         if ent_id in self.entities:
             return [
@@ -246,11 +311,19 @@ class KB(object):
             ]
         else:
             return []
-            # raise Exception('unknown id')
 
-    def get_all_concepts(self, ent_id):
-        """
-        return a concept id list
+    def get_all_concepts(self, ent_id: str) -> list[str]:
+        """Get all ancestor concept IDs of a given entity or concept.
+
+        This method performs a breadth-first search up the concept hierarchy
+        to find all ancestor concepts. It handles cycles in the hierarchy by
+        tracking visited concepts to prevent infinite loops.
+
+        Args:
+            ent_id: The entity or concept ID to get all ancestors for
+
+        Returns:
+            List of all ancestor concept IDs in the hierarchy above the given entity
         """
         ancestors = set()
         q = Queue()
@@ -260,14 +333,22 @@ class KB(object):
             con_id = q.get()
             if (
                 con_id in self.entities and con_id not in ancestors
-            ):  # 防止循环祖先的情况
+            ):  # Prevent infinite loops in case of circular hierarchies
                 ancestors.add(con_id)
                 for c in self.entities[con_id]["isA"]:
                     q.put(c)
-        ancestors = list(ancestors)
-        return ancestors
+        return list(ancestors)
 
-    def print_statistics(self):
+    def print_statistics(self) -> None:
+        """Print detailed statistics about the knowledge base content.
+
+        This method counts and displays statistics about the knowledge base including:
+        - Number of relation facts (entity-relation-entity triples)
+        - Number of attribute facts (entity-attribute-value triples)
+        - Number of qualifier facts (additional context on relations/attributes)
+
+        The statistics help understand the size and complexity of the knowledge base.
+        """
         cnt_rel, cnt_attr, cnt_qual = 0, 0, 0
         for ent_id, ent_info in self.entities.items():
             for attr_info in ent_info["attributes"]:
@@ -286,11 +367,26 @@ class KB(object):
         print("number of attribute knowledge: %d" % cnt_attr)
         print("number of qualifier knowledge: %d" % cnt_qual)
 
-    def _parse_value(self, value):
+    def _parse_value(self, value: dict[str, Any]) -> ValueClass:
+        """Parse a value dictionary into a strongly-typed ValueClass instance.
+
+        This internal method converts raw value dictionaries from the knowledge base
+        into ValueClass objects that support proper comparison operations. It handles
+        four data types: string, quantity (with units), date, and year.
+
+        Args:
+            value: Dictionary with 'type' key and type-specific value fields
+
+        Returns:
+            ValueClass instance with parsed value and appropriate type
+
+        Raises:
+            ValueError: If the value cannot be parsed according to its declared type
+        """
         if value["type"] == "string":
             result = ValueClass("string", value["value"])
         elif value["type"] == "quantity":
-            result = ValueClass("quantity", (float)(value["value"]), value["unit"])
+            result = ValueClass("quantity", float(value["value"]), value["unit"])
         else:
             x = str(value["value"])
             if "/" in x or ("-" in x and "-" != x[0]):
@@ -299,5 +395,5 @@ class KB(object):
                 y, m, d = int(x[:p1]), int(x[p1 + 1 : p2]), int(x[p2 + 1 :])
                 result = ValueClass("date", date(y, m, d))
             else:
-                result = ValueClass("year", (int)(x))
+                result = ValueClass("year", int(x))
         return result
