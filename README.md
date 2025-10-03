@@ -1,6 +1,6 @@
 # KoPL: Knowledge-oriented Reasoning and Question Answering Programming Language
 
-[Installation](#installation) | [Quick Start](#quick-start) | [Documentation](#documentation) | [Website](#website)
+[Installation](#installation) | [Quick Start](#quick-start) | [Cache Loading](#cache-loading) | [Documentation](#documentation) | [Website](#website)
 
 KoPL stands for Knowledge oriented Programming Language. It is a programming language designed for complex reasoning and question answering. Natural language questions can be represented as KoPL programs composed of basic functions, and the result of running the program is the answer to the question. Currently, KoPL provides 27 basic functions covering operations on various knowledge elements (such as concepts, entities, relations, attributes, modifiers, etc.), and supports multiple types of queries (such as counting, fact verification, comparison, etc.). KoPL offers a transparent reasoning process for complex questions, making it easy to understand and use. KoPL is extensible and can be applied to different forms of knowledge resources, such as knowledge bases and text.
 
@@ -62,6 +62,22 @@ You can prepare your own knowledge base and use KoPL for reasoning and question 
 For more examples of simple question answering using KoPL, refer to [Simple QA](https://kopl.xlore.cn/doc/5_example.html#id2), and for complex question answering, refer to [Complex QA](https://kopl.xlore.cn/doc/5_example.html#id8).
 
 You can also use our [Query Service](https://kopl.xlore.cn/queryService) to quickly start your KoPL journey.
+
+# Cache Loading
+For large JSON knowledge bases, KoPL provides a lightweight on-disk cache to speed up repeated engine initialization.
+
+Usage:
+```python
+from kopl.kopl import KoPLEngine
+engine = KoPLEngine.from_json('path/to/kb.json')
+```
+Behavior:
+* Creates/reads a pickle cache file named `kb.json.cache` beside the JSON.
+* Cache stores: { version, json_mtime, json_size, kb }.
+* Reuses cache if version matches and the source file's modification time and size are unchanged.
+* Pass `force_rebuild=True` to ignore and overwrite the cache.
+* Pass `use_cache=False` to always load the JSON directly (no read/write of cache).
+* Bump the internal `ENGINE_CACHE_VERSION` constant in `kopl.kopl` to invalidate all existing caches when KB layout logic changes.
 
 # Documentation
 We provide detailed KoPL [documentation](https://kopl.xlore.cn/doc/index.html), introducing the knowledge elements KoPL targets, basic functions, and the KoPL engine API.

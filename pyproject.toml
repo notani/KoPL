@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kopl"
-version = "1.0.1"
+version = "1.1.0"
 description = "A Knowledge oriented Programming Language for Complex Question Answering"
 readme = "README.md"
 requires-python = ">=3.6"

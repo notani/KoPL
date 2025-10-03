@@ -5,6 +5,9 @@ from typing import Any, Optional, Union
 from kopl.data import KB
 from kopl.util import ValueClass, comp
 
+# Cache version: bump this if the internal layout of KB / KoPLEngine changes
+ENGINE_CACHE_VERSION = 1
+
 # Type aliases for better readability
 EntityTuple = tuple[list[str], Optional[list[dict[str, Any]]]]
 
@@ -23,6 +26,80 @@ class KoPLEngine(object):
             kb: Knowledge base dictionary with 'entities' and 'concepts' keys
         """
         self.kb = KB(kb)
+
+    @classmethod
+    def from_json(
+        cls,
+        json_path: str,
+        use_cache: bool = True,
+        force_rebuild: bool = False,
+    ) -> "KoPLEngine":
+        """Create a KoPLEngine from a JSON file with a simple on-disk cache.
+
+        A pickle cache (``<json_path>.cache``) avoids repeatedly parsing large JSON
+        files and rebuilding indices. The cache stores:
+        - version: ENGINE_CACHE_VERSION
+        - json_mtime / json_size: basic invalidation when the source JSON changes
+        - kb: the fully built KB object
+
+        Invalidation rules:
+        - force_rebuild is True
+        - cache file missing
+        - version mismatch
+        - JSON file mtime or size changed
+
+        Args:
+            json_path: Path to the knowledge base JSON file.
+            use_cache: Whether to attempt using / writing the cache (default True).
+            force_rebuild: Force rebuilding KB and overwriting cache (default False).
+
+        Returns:
+            KoPLEngine instance backed by a KB (from cache or freshly built).
+        """
+        import os
+        import json
+        import pickle
+
+        cache_path = json_path + ".cache"
+
+        def build_kb() -> KB:
+            with open(json_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            return KB(raw)
+
+        if not use_cache:
+            kb_obj = build_kb()
+        else:
+            stat = os.stat(json_path)
+            kb_obj = None
+            need_rebuild = force_rebuild or not os.path.isfile(cache_path)
+            if not need_rebuild:
+                with open(cache_path, "rb") as f:
+                    cache = pickle.load(f)
+                meta_ok = (
+                    cache.get("version") == ENGINE_CACHE_VERSION
+                    and cache.get("json_mtime") == stat.st_mtime
+                    and cache.get("json_size") == stat.st_size
+                    and "kb" in cache
+                )
+                if meta_ok:
+                    kb_obj = cache["kb"]
+                else:
+                    need_rebuild = True
+            if need_rebuild:
+                kb_obj = build_kb()
+                cache = {
+                    "version": ENGINE_CACHE_VERSION,
+                    "json_mtime": stat.st_mtime,
+                    "json_size": stat.st_size,
+                    "kb": kb_obj,
+                }
+                with open(cache_path, "wb") as f:
+                    pickle.dump(cache, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        engine = cls.__new__(cls)
+        engine.kb = kb_obj
+        return engine
 
     def _parse_key_value(
         self, key: Optional[str], value: str, typ: Optional[str] = None
